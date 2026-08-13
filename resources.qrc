@@ -1,0 +1,7 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource prefix="/">
+    <file>resources/style.qss</file>
+    <file>resources/acmigo.ico</file>
+    <file>resources/acmigo_256.png</file>
+</qresource>
+</RCC>
