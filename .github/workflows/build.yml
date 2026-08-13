@@ -230,7 +230,7 @@ jobs:
           echo "QT_PATH=$(brew --prefix qt@5)" >> $GITHUB_ENV
 
       - name: Install Python deps
-        run: pip3 install pandas openpyxl
+        run: pip3 install pandas openpyxl --break-system-packages
 
       - name: Configure CMake
         run: |
