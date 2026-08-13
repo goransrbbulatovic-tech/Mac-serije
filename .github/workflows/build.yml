@@ -237,7 +237,14 @@ jobs:
         run: pip3 install pandas openpyxl
 
       - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$Qt5_DIR"
+        run: |
+          # Find Qt installation path
+          QT_PATH=$(find /Users/runner -name "Qt5Config.cmake" 2>/dev/null | head -1 | xargs dirname | xargs dirname | xargs dirname)
+          if [ -z "$QT_PATH" ]; then
+            QT_PATH=$(find /usr/local -name "Qt5Config.cmake" 2>/dev/null | head -1 | xargs dirname | xargs dirname | xargs dirname)
+          fi
+          echo "Qt found at: $QT_PATH"
+          cmake -B build             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_PREFIX_PATH="$QT_PATH"             -DQt5_DIR="$QT_PATH/lib/cmake/Qt5"
 
       - name: Build
         run: cmake --build build --parallel
