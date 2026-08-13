@@ -243,19 +243,36 @@ jobs:
 
       - name: Create macOS DMG
         run: |
+          QT_BIN="$(brew --prefix qt@5)/bin"
+          echo "Qt bin: $QT_BIN"
           ls -la build/
-          if [ -d "build/AcmigoIndexer.app" ]; then
-            ${{ env.QT_PATH }}/bin/macdeployqt build/AcmigoIndexer.app -dmg -always-overwrite
-            mv build/AcmigoIndexer.dmg build/AcmigoIndexer_v2.0_macOS.dmg
-          else
-            mkdir -p dmg_content
-            cp build/AcmigoIndexer dmg_content/ 2>/dev/null || true
-            cp series_seed.db dmg_content/ 2>/dev/null || true
-            hdiutil create -volname "Acmigo Indexer" \
-              -srcfolder dmg_content \
-              -ov -format UDZO \
-              build/AcmigoIndexer_v2.0_macOS.dmg
+
+          # Ensure .app bundle exists
+          if [ ! -d "build/AcmigoIndexer.app" ]; then
+            echo "ERROR: .app bundle not found!"
+            ls -la build/
+            exit 1
           fi
+
+          # Copy seed database inside app bundle
+          cp series_seed.db "build/AcmigoIndexer.app/Contents/MacOS/" || true
+
+          # Deploy Qt frameworks into .app
+          "$QT_BIN/macdeployqt" build/AcmigoIndexer.app -always-overwrite
+
+          # Remove quarantine attribute
+          xattr -cr build/AcmigoIndexer.app || true
+
+          # Create DMG
+          mkdir -p dmg_staging
+          cp -r "build/AcmigoIndexer.app" dmg_staging/
+          
+          # Add symlink to Applications
+          ln -s /Applications dmg_staging/Applications
+          
+          hdiutil create             -volname "Acmigo Indexer v2.0"             -srcfolder dmg_staging             -ov             -format UDZO             -imagekey zlib-level=9             build/AcmigoIndexer_v2.0_macOS.dmg
+
+          echo "DMG size: $(du -sh build/AcmigoIndexer_v2.0_macOS.dmg)"
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
