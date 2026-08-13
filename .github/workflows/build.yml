@@ -1,0 +1,333 @@
+name: Build Acmigo Indexer
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Windows (Qt5 + MSVC)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Qt5
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '5.15.2'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2019_64'
+          cache: true
+
+      - name: Configure CMake
+        shell: pwsh
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$env:Qt5_DIR"
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build --config Release --parallel
+
+      - name: Deploy Qt DLLs
+        shell: pwsh
+        run: |
+          cd build/Release
+          windeployqt.exe --release --no-translations --no-system-d3d-compiler --no-opengl-sw AcmigoIndexer.exe
+
+      - name: Copy OpenSSL DLLs (needed for HTTPS/IMDB)
+        shell: pwsh
+        run: |
+          # Qt5 needs OpenSSL for HTTPS requests to OMDb API
+          $qtBin = "${{ env.Qt5_DIR }}/../../bin"
+          $dest  = "build/Release"
+          foreach ($dll in @("libssl-1_1-x64.dll","libcrypto-1_1-x64.dll",
+                             "libssl-3-x64.dll","libcrypto-3-x64.dll",
+                             "openssl.exe")) {
+            $src = Join-Path $qtBin $dll
+            if (Test-Path $src) {
+              Copy-Item $src $dest
+              Write-Host "Copied: $dll"
+            }
+          }
+          # Also try from Qt SSL plugin dir
+          $sslDir = "${{ env.Qt5_DIR }}/../../plugins/tls"
+          if (Test-Path $sslDir) {
+            $tlsDest = "$dest/tls"
+            New-Item -ItemType Directory -Force -Path $tlsDest | Out-Null
+            Copy-Item "$sslDir/*" $tlsDest
+            Write-Host "Copied TLS plugins"
+          }
+          # List what we have
+          Get-ChildItem $dest -Filter "*ssl*" | ForEach-Object { Write-Host "Found: $($_.Name)" }
+          Get-ChildItem $dest -Filter "*crypto*" | ForEach-Object { Write-Host "Found: $($_.Name)" }
+
+      - name: Copy seed database
+        shell: pwsh
+        run: Copy-Item "series_seed.db" "build/Release/series_seed.db"
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Generate ISS and Build Installer
+        shell: python
+        run: |
+          import subprocess, os, sys, textwrap
+
+          iss = textwrap.dedent(r"""
+          [Setup]
+          AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
+          AppName=Acmigo Indexer - Serija
+          AppVersion=2.0
+          AppPublisher=Acmigo
+          DefaultDirName={autopf}\AcmigoIndexer
+          DefaultGroupName=Acmigo Indexer
+          DisableProgramGroupPage=yes
+          PrivilegesRequired=lowest
+          OutputBaseFilename=AcmigoIndexer_v2.0_Setup
+          OutputDir=dist
+          Compression=lzma2/ultra64
+          SolidCompression=yes
+          WizardStyle=modern
+          UninstallDisplayName=Acmigo Indexer - Serija v2.0
+          CloseApplications=yes
+          SetupIconFile=resources\acmigo.ico
+
+          [Languages]
+          Name: "english"; MessagesFile: "compiler:Default.isl"
+
+          [Tasks]
+          Name: "desktopicon"; Description: "Napravi ikonu na desktopu"; Flags: unchecked
+
+          [Files]
+          Source: "build\Release\AcmigoIndexer.exe"; DestDir: "{app}"; Flags: ignoreversion
+          Source: "resources\acmigo.ico"; DestDir: "{app}"; Flags: ignoreversion
+          Source: "build\Release\Qt5Core.dll"; DestDir: "{app}"; Flags: ignoreversion
+          Source: "build\Release\Qt5Gui.dll"; DestDir: "{app}"; Flags: ignoreversion
+          Source: "build\Release\Qt5Widgets.dll"; DestDir: "{app}"; Flags: ignoreversion
+          Source: "build\Release\Qt5Network.dll"; DestDir: "{app}"; Flags: ignoreversion
+          Source: "build\Release\Qt5Sql.dll"; DestDir: "{app}"; Flags: ignoreversion
+          Source: "build\Release\platforms\*"; DestDir: "{app}\platforms"; Flags: ignoreversion recursesubdirs
+          Source: "build\Release\sqldrivers\*"; DestDir: "{app}\sqldrivers"; Flags: ignoreversion recursesubdirs
+          Source: "build\Release\imageformats\*"; DestDir: "{app}\imageformats"; Flags: ignoreversion recursesubdirs skipifsourcedoesntexist
+          Source: "build\Release\styles\*"; DestDir: "{app}\styles"; Flags: ignoreversion recursesubdirs skipifsourcedoesntexist
+          Source: "build\Release\vcruntime140.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+          Source: "build\Release\vcruntime140_1.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+          Source: "build\Release\msvcp140.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+          Source: "build\Release\libssl-1_1-x64.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+          Source: "build\Release\libcrypto-1_1-x64.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+          Source: "build\Release\libssl-3-x64.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+          Source: "build\Release\libcrypto-3-x64.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+          Source: "build\Release\tls\*"; DestDir: "{app}\tls"; Flags: ignoreversion recursesubdirs skipifsourcedoesntexist
+          Source: "series_seed.db"; DestDir: "{app}"; Flags: ignoreversion
+
+          [Icons]
+          Name: "{group}\Acmigo Indexer - Serija"; Filename: "{app}\AcmigoIndexer.exe"; IconFilename: "{app}\acmigo.ico"
+          Name: "{group}\Deinstalacija"; Filename: "{uninstallexe}"
+          Name: "{autodesktop}\Acmigo Indexer - Serija"; Filename: "{app}\AcmigoIndexer.exe"; IconFilename: "{app}\acmigo.ico"; Tasks: desktopicon
+
+          [Run]
+          Filename: "{app}\AcmigoIndexer.exe"; Description: "Pokrenite Acmigo Indexer"; Flags: nowait postinstall skipifsilent
+
+          [Code]
+          function IsPythonInstalled(): Boolean;
+          var ResultCode: Integer;
+          begin
+            Result := Exec('cmd.exe', '/C python --version', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+          end;
+
+          procedure CurStepChanged(CurStep: TSetupStep);
+          var ResultCode: Integer;
+          begin
+            if CurStep = ssPostInstall then
+              if IsPythonInstalled() then
+                Exec('cmd.exe', '/C python -m pip install pandas openpyxl --quiet --user', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+          end;
+          """).strip()
+
+          os.makedirs("dist", exist_ok=True)
+          with open("setup.iss", "w", encoding="utf-8") as f:
+              f.write(iss)
+
+          result = subprocess.run(
+              [r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe", "setup.iss"],
+              capture_output=True, text=True
+          )
+          print(result.stdout)
+          if result.stderr:
+              print(result.stderr)
+          sys.exit(result.returncode)
+
+      - name: Create Portable ZIP
+        shell: pwsh
+        run: |
+          cd build
+          Compress-Archive -Path "Release\*" -DestinationPath "AcmigoIndexer_v2.0_Portable.zip"
+
+      - name: Upload Installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: AcmigoIndexer-Windows-Installer
+          path: dist/AcmigoIndexer_v2.0_Setup.exe
+          retention-days: 30
+
+      - name: Upload Portable
+        uses: actions/upload-artifact@v4
+        with:
+          name: AcmigoIndexer-Windows-Portable
+          path: build/AcmigoIndexer_v2.0_Portable.zip
+          retention-days: 30
+
+  build-linux:
+    name: Linux (Qt5 + GCC)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y cmake qtbase5-dev libqt5sql5-sqlite libqt5network5 python3-openpyxl python3-pandas
+
+      - name: Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp build/AcmigoIndexer dist/AcmigoIndexer_Linux_x64
+          cp series_seed.db dist/
+          cp README.md dist/
+          cd dist && tar -czf ../AcmigoIndexer_Linux_x64.tar.gz .
+
+      - name: Upload Linux
+        uses: actions/upload-artifact@v4
+        with:
+          name: AcmigoIndexer-Linux-x64
+          path: AcmigoIndexer_Linux_x64.tar.gz
+          retention-days: 30
+
+
+  build-macos:
+    name: macOS (Qt5 + Clang)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Qt5
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '5.15.2'
+          host: 'mac'
+          target: 'desktop'
+          arch: 'clang_64'
+          cache: true
+
+      - name: Install Python deps
+        run: pip3 install pandas openpyxl
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$Qt5_DIR"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Create macOS App Bundle and DMG
+        run: |
+          # Check what was built
+          ls -la build/
+          
+          # If .app bundle exists, use macdeployqt
+          if [ -d "build/AcmigoIndexer.app" ]; then
+            macdeployqt build/AcmigoIndexer.app -dmg -always-overwrite
+            mv build/AcmigoIndexer.dmg build/AcmigoIndexer_v2.0_macOS.dmg
+          else
+            # Create manual DMG from binary
+            mkdir -p dmg_staging
+            cp build/AcmigoIndexer dmg_staging/
+            cp series_seed.db dmg_staging/
+            
+            # Copy Qt frameworks manually using macdeployqt on binary
+            # First wrap in .app bundle
+            mkdir -p "dmg_staging/AcmigoIndexer.app/Contents/MacOS"
+            mkdir -p "dmg_staging/AcmigoIndexer.app/Contents/Resources"
+            cp build/AcmigoIndexer "dmg_staging/AcmigoIndexer.app/Contents/MacOS/"
+            cat > "dmg_staging/AcmigoIndexer.app/Contents/Info.plist" << 'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleExecutable</key><string>AcmigoIndexer</string>
+            <key>CFBundleIdentifier</key><string>com.acmigo.indexer</string>
+            <key>CFBundleName</key><string>Acmigo Indexer</string>
+            <key>CFBundleVersion</key><string>2.0</string>
+            <key>CFBundleShortVersionString</key><string>2.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict></plist>
+          PLIST
+            macdeployqt "dmg_staging/AcmigoIndexer.app" -always-overwrite
+            cp series_seed.db "dmg_staging/AcmigoIndexer.app/Contents/MacOS/"
+            
+            # Create DMG
+            hdiutil create -volname "Acmigo Indexer"               -srcfolder dmg_staging               -ov -format UDZO               build/AcmigoIndexer_v2.0_macOS.dmg
+          fi
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AcmigoIndexer-macOS
+          path: build/AcmigoIndexer_v2.0_macOS.dmg
+          retention-days: 30
+
+  release:
+    name: Create GitHub Release
+    needs: [build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Acmigo Indexer - Serija ${{ github.ref_name }}"
+          body: |
+            ## Acmigo Indexer - Serija ${{ github.ref_name }}
+
+            | Fajl | Platforma | Opis |
+            |------|-----------|------|
+            | AcmigoIndexer_v2.0_Setup.exe | Windows 10/11 | Installer |
+            | AcmigoIndexer_v2.0_Portable.zip | Windows 10/11 | Portable |
+            | AcmigoIndexer_v2.0_macOS.dmg | macOS 11+ | DMG installer |
+            | AcmigoIndexer_Linux_x64.tar.gz | Linux 64-bit | Binarni paket |
+
+            Na prvom pokretanju unesite serijski broj.
+            IMDB API kljuc: https://www.omdbapi.com/apikey.aspx
+          files: |
+            artifacts/AcmigoIndexer_v2.0_Setup.exe
+            artifacts/AcmigoIndexer_v2.0_Portable.zip
+            artifacts/AcmigoIndexer_Linux_x64.tar.gz
+            artifacts/AcmigoIndexer_v2.0_macOS.dmg
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
