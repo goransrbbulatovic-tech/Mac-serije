@@ -49,12 +49,20 @@ if(${QT_VERSION_MAJOR} EQUAL 6)
     qt_add_resources(RESOURCES resources.qrc)
     add_executable(AcmigoIndexer ${SOURCES} ${HEADERS} ${RESOURCES})
     target_link_libraries(AcmigoIndexer PRIVATE
-        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Sql)
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        Qt6::Network
+        Qt6::Sql)
 else()
     qt5_add_resources(RESOURCES resources.qrc)
     add_executable(AcmigoIndexer ${SOURCES} ${HEADERS} ${RESOURCES})
     target_link_libraries(AcmigoIndexer PRIVATE
-        Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Network Qt5::Sql)
+        Qt5::Core
+        Qt5::Gui
+        Qt5::Widgets
+        Qt5::Network
+        Qt5::Sql)
 endif()
 
 if(WIN32)
@@ -76,6 +84,11 @@ if(APPLE)
         MACOSX_BUNDLE_SHORT_VERSION_STRING "2.0"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.acmigo.indexer"
         OUTPUT_NAME "AcmigoIndexer")
+    # On macOS link against Cocoa framework needed by Qt
+    target_link_libraries(AcmigoIndexer PRIVATE
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework CoreFoundation")
 endif()
 
 install(TARGETS AcmigoIndexer DESTINATION bin)
