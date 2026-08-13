@@ -224,68 +224,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Qt5
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '5.15.2'
-          host: 'mac'
-          target: 'desktop'
-          arch: 'clang_64'
-          cache: true
+      - name: Install Qt5 via Homebrew
+        run: |
+          brew install qt@5
+          echo "QT_PATH=$(brew --prefix qt@5)" >> $GITHUB_ENV
 
       - name: Install Python deps
         run: pip3 install pandas openpyxl
 
       - name: Configure CMake
         run: |
-          # Find Qt installation path
-          QT_PATH=$(find /Users/runner -name "Qt5Config.cmake" 2>/dev/null | head -1 | xargs dirname | xargs dirname | xargs dirname)
-          if [ -z "$QT_PATH" ]; then
-            QT_PATH=$(find /usr/local -name "Qt5Config.cmake" 2>/dev/null | head -1 | xargs dirname | xargs dirname | xargs dirname)
-          fi
-          echo "Qt found at: $QT_PATH"
-          cmake -B build             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_PREFIX_PATH="$QT_PATH"             -DQt5_DIR="$QT_PATH/lib/cmake/Qt5"
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="${{ env.QT_PATH }}"
 
       - name: Build
         run: cmake --build build --parallel
 
-      - name: Create macOS App Bundle and DMG
+      - name: Create macOS DMG
         run: |
-          # Check what was built
           ls -la build/
-          
-          # If .app bundle exists, use macdeployqt
           if [ -d "build/AcmigoIndexer.app" ]; then
-            macdeployqt build/AcmigoIndexer.app -dmg -always-overwrite
+            ${{ env.QT_PATH }}/bin/macdeployqt build/AcmigoIndexer.app -dmg -always-overwrite
             mv build/AcmigoIndexer.dmg build/AcmigoIndexer_v2.0_macOS.dmg
           else
-            # Create manual DMG from binary
-            mkdir -p dmg_staging
-            cp build/AcmigoIndexer dmg_staging/
-            cp series_seed.db dmg_staging/
-            
-            # Copy Qt frameworks manually using macdeployqt on binary
-            # First wrap in .app bundle
-            mkdir -p "dmg_staging/AcmigoIndexer.app/Contents/MacOS"
-            mkdir -p "dmg_staging/AcmigoIndexer.app/Contents/Resources"
-            cp build/AcmigoIndexer "dmg_staging/AcmigoIndexer.app/Contents/MacOS/"
-            cat > "dmg_staging/AcmigoIndexer.app/Contents/Info.plist" << 'PLIST'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0"><dict>
-            <key>CFBundleExecutable</key><string>AcmigoIndexer</string>
-            <key>CFBundleIdentifier</key><string>com.acmigo.indexer</string>
-            <key>CFBundleName</key><string>Acmigo Indexer</string>
-            <key>CFBundleVersion</key><string>2.0</string>
-            <key>CFBundleShortVersionString</key><string>2.0</string>
-            <key>NSHighResolutionCapable</key><true/>
-          </dict></plist>
-          PLIST
-            macdeployqt "dmg_staging/AcmigoIndexer.app" -always-overwrite
-            cp series_seed.db "dmg_staging/AcmigoIndexer.app/Contents/MacOS/"
-            
-            # Create DMG
-            hdiutil create -volname "Acmigo Indexer"               -srcfolder dmg_staging               -ov -format UDZO               build/AcmigoIndexer_v2.0_macOS.dmg
+            mkdir -p dmg_content
+            cp build/AcmigoIndexer dmg_content/ 2>/dev/null || true
+            cp series_seed.db dmg_content/ 2>/dev/null || true
+            hdiutil create -volname "Acmigo Indexer" \
+              -srcfolder dmg_content \
+              -ov -format UDZO \
+              build/AcmigoIndexer_v2.0_macOS.dmg
           fi
 
       - name: Upload macOS artifact
